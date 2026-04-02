@@ -12,6 +12,10 @@ from chat_history import (
     delete_conversation, new_conversation_id,
 )
 from auth import login, register, validate_email
+from dashboard import (
+    save_panel, list_panels, delete_panel, refresh_panel, new_panel_id,
+)
+from datetime import datetime
 
 # --- Logo em base64 para uso inline ---
 _LOGO_PATH = os.path.join(os.path.dirname(__file__), "logo.png")
@@ -434,11 +438,19 @@ with st.sidebar:
 
     _user = st.session_state.get("user_email", "")
 
+    if "current_view" not in st.session_state:
+        st.session_state.current_view = "chat"
+
     if st.button("➕  Nova conversa", use_container_width=True, type="secondary", disabled=_disabled):
         if st.session_state.messages:
             save_conversation(st.session_state.conv_id, st.session_state.messages, _user)
         st.session_state.messages = []
         st.session_state.conv_id = new_conversation_id()
+        st.session_state.current_view = "chat"
+        st.rerun()
+
+    if st.button("📊  Meu Dashboard", use_container_width=True, type="secondary", disabled=_disabled):
+        st.session_state.current_view = "dashboard"
         st.rerun()
 
     st.divider()
@@ -536,6 +548,83 @@ SUGGESTIONS = [
     "Quais KPIs do setor de Marketing estão ativos?",
 ]
 
+
+# ============================================================
+# DASHBOARD VIEW
+# ============================================================
+def _render_dashboard():
+    heading_color = T["heading"]
+    secondary_color = T["text_secondary"]
+    border_color = T["border"]
+    bg2 = T["bg_secondary"]
+
+    st.markdown(
+        f"<h2 style='color:{heading_color}; text-align:center; margin-top:1rem;'>"
+        f"Meu Dashboard</h2>",
+        unsafe_allow_html=True,
+    )
+
+    panels = list_panels(_user)
+
+    if not panels:
+        st.markdown(
+            f"<p style='text-align:center; color:{secondary_color}; margin-top:2rem;'>"
+            "Nenhum painel fixado ainda.<br>"
+            "Converse com o Nektar no Chat, gere gráficos e clique em "
+            "<b>📌 Fixar no Dashboard</b> para adicioná-los aqui.</p>",
+            unsafe_allow_html=True,
+        )
+        return
+
+    if st.button("🔄 Atualizar todos", disabled=_disabled):
+        with st.spinner("Atualizando painéis..."):
+            for panel in panels:
+                refresh_panel(panel["id"], _user)
+        st.rerun()
+
+    cols = st.columns(2)
+    for i, panel in enumerate(panels):
+        with cols[i % 2]:
+            st.markdown(
+                f"<div style='border:1px solid {border_color}; border-radius:12px; "
+                f"padding:1rem; margin-bottom:1rem; "
+                f"background-color:{bg2};'>",
+                unsafe_allow_html=True,
+            )
+            st.markdown(f"**{panel.get('title', 'Painel')}**")
+            st.caption(f"Pergunta: {panel.get('original_question', '-')}")
+
+            fig = create_chart(panel.get("chart_data", {}), dark_mode=dark)
+            if fig:
+                st.plotly_chart(fig, use_container_width=True, key=f"dash_{panel['id']}")
+
+            st.caption(f"Atualizado: {panel.get('last_refreshed_at', '-')}")
+
+            c1, c2 = st.columns(2)
+            with c1:
+                if st.button("🔄 Atualizar", key=f"ref_{panel['id']}", use_container_width=True):
+                    with st.spinner("Atualizando..."):
+                        ok, err = refresh_panel(panel["id"], _user)
+                    if not ok:
+                        st.error(err)
+                    else:
+                        st.rerun()
+            with c2:
+                if st.button("🗑️ Remover", key=f"rmpanel_{panel['id']}", use_container_width=True):
+                    delete_panel(panel["id"], _user)
+                    st.rerun()
+
+            st.markdown("</div>", unsafe_allow_html=True)
+
+
+# ============================================================
+# CONTEÚDO PRINCIPAL — Chat ou Dashboard
+# ============================================================
+if st.session_state.current_view == "dashboard":
+    _render_dashboard()
+    st.stop()
+
+# --- CHAT VIEW ---
 # --- Welcome screen ---
 if not st.session_state.messages:
     st.markdown(f"""
@@ -566,13 +655,32 @@ if not st.session_state.messages:
                 st.rerun()
 
 # --- Chat history ---
-for msg in st.session_state.messages:
+for msg_idx, msg in enumerate(st.session_state.messages):
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
         if msg.get("chart_data"):
             fig = create_chart(msg["chart_data"], dark_mode=dark)
             if fig:
                 st.plotly_chart(fig, use_container_width=True)
+                if msg.get("sql_query"):
+                    # Encontra a pergunta original (última msg user antes desta)
+                    orig_q = ""
+                    for prev in st.session_state.messages[:msg_idx]:
+                        if prev["role"] == "user":
+                            orig_q = prev["content"]
+                    if st.button("📌 Fixar no Dashboard", key=f"pin_{msg_idx}"):
+                        save_panel({
+                            "id": new_panel_id(),
+                            "user_email": _user,
+                            "title": msg["chart_data"].get("title", "Painel"),
+                            "sql_query": msg["sql_query"],
+                            "chart_data": msg["chart_data"],
+                            "original_question": orig_q[:100],
+                            "pinned_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                            "last_refreshed_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                        })
+                        st.toast("Gráfico fixado no Dashboard!")
+                        st.rerun()
 
 # --- User input ---
 pending = st.session_state.pop("_pending_prompt", None)
@@ -596,7 +704,7 @@ if prompt:
                     for m in st.session_state.messages[:-1]
                 ]
 
-                response_text, cost = run_agent(
+                response_text, cost, last_sql = run_agent(
                     prompt,
                     history=history,
                     on_status=on_status,
@@ -620,6 +728,7 @@ if prompt:
                     "role": "assistant",
                     "content": clean_text,
                     "chart_data": chart_data,
+                    "sql_query": last_sql,
                 })
                 save_conversation(
                     st.session_state.conv_id,

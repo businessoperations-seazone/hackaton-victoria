@@ -158,12 +158,12 @@ def run_agent(
     user_message: str,
     history: list[dict] | None = None,
     on_status: callable = None,
-) -> tuple[str, float]:
+) -> tuple[str, float, str | None]:
     """
     Executa uma pergunta via OpenRouter API com tool calling.
 
     Returns:
-        (resposta_texto, custo_em_dolares)
+        (resposta_texto, custo_em_dolares, ultimo_sql_executado)
     """
     client = _get_client()
 
@@ -180,6 +180,7 @@ def run_agent(
     # Loop de tool calling
     total_input_tokens = 0
     total_output_tokens = 0
+    sql_queries = []
 
     for round_num in range(MAX_TOOL_ROUNDS):
         if on_status:
@@ -220,6 +221,8 @@ def run_agent(
                 on_status(tool_label)
 
             args = json.loads(tc.function.arguments)
+            if tc.function.name == "execute_sql" and "sql_query" in args:
+                sql_queries.append(args["sql_query"])
             result = _execute_tool_call(tc.function.name, args)
 
             messages.append({
@@ -240,4 +243,5 @@ def run_agent(
         save_memory(entries)
 
     cost = (total_input_tokens * _PRICE_INPUT) + (total_output_tokens * _PRICE_OUTPUT)
-    return _remove_memory_block(response_text), cost
+    last_sql = sql_queries[-1] if sql_queries else None
+    return _remove_memory_block(response_text), cost, last_sql
