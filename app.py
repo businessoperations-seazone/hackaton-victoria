@@ -22,7 +22,7 @@ load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 # --- Page config ---
 st.set_page_config(
     page_title="Nektar - Agente de Negócio Seazone",
-    page_icon="🏠",
+    page_icon=_LOGO_PATH,
     layout="centered",
 )
 
@@ -311,6 +311,12 @@ st.markdown(f"""
     footer {{visibility: hidden;}}
     #sidebar-title {{
         color: {T["heading"]};
+    }}
+    /* Esconder ícone de link nos headings */
+    h1 a, h2 a, h3 a, h4 a,
+    [data-testid="stMarkdownContainer"] a.header-link,
+    .stMarkdown h2 a {{
+        display: none !important;
     }}
     .stMarkdown, .stMarkdown p {{
         color: {T["text"]};
