@@ -9,7 +9,8 @@ import os
 
 
 def _db_url() -> str:
-    return os.environ.get("DATABASE_URL", "")
+    url = os.environ.get("DATABASE_URL", "")
+    return url.replace(" ", "%20") if url else ""
 
 
 # ---------------------------------------------------------------------------
