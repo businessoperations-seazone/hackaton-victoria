@@ -117,11 +117,33 @@ def _remove_memory_block(text: str) -> str:
     return re.sub(r"\[MEMORY\].*?\[/MEMORY\]", "", text, flags=re.DOTALL).strip()
 
 
+_KPI_TABLE_PATTERN = re.compile(r"(?i)\b\w*kpis?\w*\b")
+
+
+def _add_kpi_warning(name: str, result: str) -> str:
+    """Adiciona aviso se get_relevant_tables_ddl retornou tabelas de KPI."""
+    if name != "get_relevant_tables_ddl":
+        return result
+    kpi_tables = _KPI_TABLE_PATTERN.findall(result)
+    if kpi_tables:
+        return (
+            result
+            + "\n\n⚠️ ATENÇÃO: Os resultados acima incluem tabelas de KPI "
+            f"({', '.join(set(kpi_tables))}). "
+            "NÃO use essas tabelas. Escolha apenas tabelas de domínio específico "
+            "(ex: dados_churn, deals_pipedrive, etc). "
+            "Se só apareceram tabelas de KPI, refaça a busca com palavras-chave "
+            "mais específicas do domínio."
+        )
+    return result
+
+
 def _execute_tool_call(name: str, arguments: dict) -> str:
     """Executa uma tool call no Nekt MCP."""
     mcp_name = _TOOL_MAP.get(name, name)
     try:
-        return call_tool(mcp_name, arguments)
+        result = call_tool(mcp_name, arguments)
+        return _add_kpi_warning(name, result)
     except Exception as e:
         return f"Erro ao executar {name}: {e}"
 

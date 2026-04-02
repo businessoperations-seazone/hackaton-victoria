@@ -1,36 +1,42 @@
-"""Interface de chat Streamlit para o Agente de Perguntas de Negócio."""
+"""Interface de chat Streamlit para o Nektar - Agente de Negócio Seazone."""
 
 import os
+import base64
 import streamlit as st
 from dotenv import load_dotenv
 from agent import run_agent
 from charts import extract_chart_data, remove_chart_block, create_chart
 from memory import load_memory, save_memory
+from chat_history import (
+    save_conversation, load_conversation, list_conversations,
+    delete_conversation, new_conversation_id,
+)
+
+# --- Logo em base64 para uso inline ---
+_LOGO_PATH = os.path.join(os.path.dirname(__file__), "logo.png")
+with open(_LOGO_PATH, "rb") as _f:
+    _LOGO_B64 = base64.b64encode(_f.read()).decode()
 
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
 # --- Page config ---
 st.set_page_config(
-    page_title="Agente BI Seazone",
-    page_icon="📊",
+    page_title="Nektar - Agente de Negócio Seazone",
+    page_icon="🏠",
     layout="centered",
 )
 
 # --- Dark mode: usa a key do toggle diretamente ---
 if "dark_mode" not in st.session_state:
-    st.session_state.dark_mode = False
+    st.session_state.dark_mode = True
 
 # --- Sidebar (renderiza primeiro para capturar o toggle) ---
 with st.sidebar:
-    st.markdown("""
-    <div style="text-align: center; padding: 0.5rem 0 1rem;">
-        <span style="font-size: 2.2rem;">📊</span>
-        <h3 id="sidebar-title" style="margin: 0.3rem 0 0; font-weight: 700;">
-            Agente BI Seazone
-        </h3>
-        <span style="font-size: 0.8rem; opacity: 0.6;">
-            Powered by Nekt Data Lakehouse
-        </span>
+    st.markdown(f"""
+    <div id="nektar-sidebar-header">
+        <img src="data:image/png;base64,{_LOGO_B64}" />
+        <h3 id="sidebar-title">Nektar</h3>
+        <span>Agente de Negócio Seazone</span>
     </div>
     """, unsafe_allow_html=True)
 
@@ -40,20 +46,45 @@ with st.sidebar:
 
     st.divider()
 
-    if st.button("🗑️  Nova conversa", use_container_width=True, type="secondary"):
+    if st.button("➕  Nova conversa", use_container_width=True, type="secondary"):
+        # Salva conversa atual antes de criar nova
+        if st.session_state.messages:
+            save_conversation(st.session_state.conv_id, st.session_state.messages)
         st.session_state.messages = []
+        st.session_state.conv_id = new_conversation_id()
         st.rerun()
 
     st.divider()
 
-    st.markdown("##### O que posso fazer")
-    st.caption(
-        "🔍 Consultar KPIs de qualquer setor\n\n"
-        "📈 Gerar gráficos automaticamente\n\n"
-        "🏠 Dados de imóveis, reservas, churn\n\n"
-        "👥 Métricas de People e Financeiro\n\n"
-        "📊 Comparar períodos e tendências"
-    )
+    # --- Histórico de conversas ---
+    st.markdown("##### Conversas anteriores")
+    conversations = list_conversations()
+    if conversations:
+        for conv in conversations:
+            col1, col2 = st.columns([5, 1])
+            with col1:
+                if st.button(
+                    f"💬 {conv['title']}",
+                    key=f"conv_{conv['id']}",
+                    use_container_width=True,
+                ):
+                    # Salva conversa atual antes de trocar
+                    if st.session_state.messages:
+                        save_conversation(
+                            st.session_state.conv_id, st.session_state.messages
+                        )
+                    st.session_state.messages = load_conversation(conv["id"])
+                    st.session_state.conv_id = conv["id"]
+                    st.rerun()
+            with col2:
+                if st.button("🗑️", key=f"del_{conv['id']}"):
+                    delete_conversation(conv["id"])
+                    if st.session_state.conv_id == conv["id"]:
+                        st.session_state.messages = []
+                        st.session_state.conv_id = new_conversation_id()
+                    st.rerun()
+    else:
+        st.caption("Nenhuma conversa salva ainda.")
 
     st.divider()
 
@@ -76,7 +107,7 @@ with st.sidebar:
         else:
             st.caption("Nenhum aprendizado registrado ainda.")
 
-    st.caption("v1.0 · Dados atualizados diariamente")
+    st.caption("Nektar v1.0 · Dados atualizados diariamente")
 
 # --- Tokens de cor por tema ---
 if dark:
@@ -113,6 +144,61 @@ else:
 # --- Custom CSS ---
 st.markdown(f"""
 <style>
+    /* === Sidebar history buttons === */
+    [data-testid="stSidebar"] [data-testid="stHorizontalBlock"] .stButton > button {{
+        font-size: 0.78rem !important;
+        padding: 0.35rem 0.5rem !important;
+        border-radius: 8px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }}
+
+    /* === Nektar sidebar header === */
+    #nektar-sidebar-header {{
+        text-align: center !important;
+        padding: 0.5rem 0 1rem;
+    }}
+    #nektar-sidebar-header img {{
+        width: 60px;
+        height: 60px;
+        object-fit: contain;
+        margin: 0 auto;
+        display: block;
+    }}
+    #nektar-sidebar-header h3 {{
+        margin: 0.3rem 0 0;
+        font-weight: 700;
+        text-align: center !important;
+    }}
+    #nektar-sidebar-header span {{
+        font-size: 0.8rem;
+        opacity: 0.6;
+        text-align: center !important;
+        display: block;
+    }}
+
+    /* === Nektar welcome screen === */
+    #nektar-welcome {{
+        text-align: center !important;
+        padding: 3rem 1rem 1rem;
+    }}
+    #nektar-welcome img {{
+        width: 80px;
+        height: 80px;
+        object-fit: contain;
+        margin: 0 auto 0.5rem;
+        display: block;
+    }}
+    #nektar-welcome h2 {{
+        margin-bottom: 0.25rem;
+        text-align: center !important;
+    }}
+    #nektar-welcome p {{
+        font-size: 1.05rem;
+        text-align: center !important;
+    }}
+
     /* === Base === */
     .stApp, .main .block-container {{
         background-color: {T["bg"]};
@@ -242,6 +328,16 @@ st.markdown(f"""
         border-color: {T["border"]} !important;
     }}
 
+    /* === Header / toolbar / top bar === */
+    header, header[data-testid="stHeader"],
+    [data-testid="stHeader"],
+    [data-testid="stToolbar"],
+    [data-testid="stDecoration"],
+    .stApp > header {{
+        background-color: {T["bg"]} !important;
+        border-bottom: 1px solid {T["border"]};
+    }}
+
     /* === Nuclear: qualquer fundo branco restante === */
     .stApp .main,
     .stApp .main > div,
@@ -260,6 +356,8 @@ st.markdown(f"""
 # --- Session state ---
 if "messages" not in st.session_state:
     st.session_state.messages = []
+if "conv_id" not in st.session_state:
+    st.session_state.conv_id = new_conversation_id()
 
 SUGGESTIONS = [
     "Qual o valor do churn de imóveis este mês?",
@@ -273,11 +371,11 @@ SUGGESTIONS = [
 # --- Welcome screen ---
 if not st.session_state.messages:
     st.markdown(f"""
-    <div style="text-align: center; padding: 3rem 1rem 1rem;">
-        <div style="font-size: 3rem; margin-bottom: 0.5rem;">📊</div>
-        <h2 style="color: {T["heading"]}; margin-bottom: 0.25rem;">Agente BI Seazone</h2>
-        <p style="color: {T["text_secondary"]}; font-size: 1.05rem;">
-            Pergunte qualquer coisa sobre os dados da Seazone em linguagem natural.
+    <div id="nektar-welcome">
+        <img src="data:image/png;base64,{_LOGO_B64}" />
+        <h2 style="color: {T["heading"]};">Nektar</h2>
+        <p style="color: {T["text_secondary"]};">
+            Agente de Negócio Seazone. Pergunte qualquer coisa sobre os dados em linguagem natural.
         </p>
     </div>
     """, unsafe_allow_html=True)
@@ -352,6 +450,9 @@ if prompt:
                     "content": clean_text,
                     "chart_data": chart_data,
                 })
+                save_conversation(
+                    st.session_state.conv_id, st.session_state.messages
+                )
                 st.rerun()
 
             except Exception as e:
