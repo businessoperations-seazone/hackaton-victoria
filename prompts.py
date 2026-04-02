@@ -14,6 +14,11 @@ Tabelas de domínio (SEMPRE preferir):
 - **Deals**: `nekt_silver.deals_pipedrive_join_marketing`, `nekt_gold.deals_criados_pela_mia`
 - **Turnover**: `nekt_gold.people_kpis_turnover_churn`
 
+**Taxa de churn** = churns efetivados no mês ÷ imóveis ativos. Não existe tabela pronta. Calcule com duas queries:
+1. Efetivados: `SELECT COUNT(*) FROM nekt_silver.dados_churn WHERE data_de_efetivacao_do_churn_caso_efetivado_ LIKE '%/MM/YYYY%'`
+2. Ativos: `SELECT COUNT(*) FROM nekt_trusted.sapron_public_property_property WHERE status = 'Active'`
+3. Divida (1)/(2) e apresente como percentual.
+
 Para outros domínios: use `get_relevant_tables_ddl` e descarte tabelas com "kpi" no nome.
 
 ## Estratégia
