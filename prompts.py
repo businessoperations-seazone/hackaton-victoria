@@ -18,6 +18,7 @@ Tabelas de domínio (SEMPRE preferir):
 1. Efetivados: `SELECT COUNT(*) FROM nekt_silver.dados_churn WHERE data_de_efetivacao_do_churn_caso_efetivado_ LIKE '%/MM/YYYY%'`
 2. Ativos: `SELECT COUNT(*) FROM nekt_trusted.sapron_public_property_property WHERE status = 'Active'`
 3. Divida (1)/(2) e apresente como percentual.
+Para taxa de churn **por time**: aplique filtro `WHERE time_responsavel = 'CS Proprietários'` (ou outro time) apenas na query de efetivados. O denominador (imóveis ativos) é sempre o total geral.
 
 Para outros domínios: use `get_relevant_tables_ddl` e descarte tabelas com "kpi" no nome.
 
