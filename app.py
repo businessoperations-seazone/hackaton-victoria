@@ -33,7 +33,7 @@ st.set_page_config(
 
 # --- State defaults ---
 if "dark_mode" not in st.session_state:
-    st.session_state.dark_mode = True
+    st.session_state.dark_mode = False
 if "is_processing" not in st.session_state:
     st.session_state.is_processing = False
 
