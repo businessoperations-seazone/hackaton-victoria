@@ -10,7 +10,11 @@ import os
 
 def _db_url() -> str:
     url = os.environ.get("DATABASE_URL", "")
-    return url.replace(" ", "%20") if url else ""
+    if not url:
+        return ""
+    # Remover query string para evitar problemas com sslmode/channel_binding
+    url = url.split("?")[0]
+    return url
 
 
 # ---------------------------------------------------------------------------
