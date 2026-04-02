@@ -7,27 +7,27 @@ para arquivos JSON no disco (útil para desenvolvimento local).
 import json
 import os
 
-# ---------------------------------------------------------------------------
-# PostgreSQL backend
-# ---------------------------------------------------------------------------
-_pool = None
-
 
 def _db_url() -> str:
     return os.environ.get("DATABASE_URL", "")
 
 
-def _get_pool():
-    global _pool
-    if _pool is None:
-        from psycopg_pool import ConnectionPool
-        _pool = ConnectionPool(_db_url(), min_size=1, max_size=5)
-        _init_table()
-    return _pool
+# ---------------------------------------------------------------------------
+# PostgreSQL backend
+# ---------------------------------------------------------------------------
+_initialized = False
 
 
-def _init_table():
-    with _get_pool().connection() as conn:
+def _connect():
+    import psycopg
+    return psycopg.connect(_db_url())
+
+
+def _ensure_table():
+    global _initialized
+    if _initialized:
+        return
+    with _connect() as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS json_store (
                 key TEXT PRIMARY KEY,
@@ -35,10 +35,12 @@ def _init_table():
             )
         """)
         conn.commit()
+    _initialized = True
 
 
 def _pg_load(key: str, default=None):
-    with _get_pool().connection() as conn:
+    _ensure_table()
+    with _connect() as conn:
         row = conn.execute(
             "SELECT data FROM json_store WHERE key = %s", (key,)
         ).fetchone()
@@ -48,7 +50,8 @@ def _pg_load(key: str, default=None):
 
 
 def _pg_save(key: str, data) -> None:
-    with _get_pool().connection() as conn:
+    _ensure_table()
+    with _connect() as conn:
         conn.execute(
             """INSERT INTO json_store (key, data) VALUES (%s, %s::jsonb)
                ON CONFLICT (key) DO UPDATE SET data = EXCLUDED.data""",
