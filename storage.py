@@ -1,0 +1,95 @@
+"""Persistência de dados JSON via PostgreSQL (DATABASE_URL) ou arquivos locais.
+
+Se DATABASE_URL estiver definida, usa PostgreSQL. Caso contrário, fallback
+para arquivos JSON no disco (útil para desenvolvimento local).
+"""
+
+import json
+import os
+
+_DATABASE_URL = os.environ.get("DATABASE_URL", "")
+
+# ---------------------------------------------------------------------------
+# PostgreSQL backend
+# ---------------------------------------------------------------------------
+_pool = None
+
+
+def _get_pool():
+    global _pool
+    if _pool is None:
+        from psycopg_pool import ConnectionPool
+        _pool = ConnectionPool(_DATABASE_URL, min_size=1, max_size=5)
+        _init_table()
+    return _pool
+
+
+def _init_table():
+    with _get_pool().connection() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS json_store (
+                key TEXT PRIMARY KEY,
+                data JSONB NOT NULL DEFAULT '[]'::jsonb
+            )
+        """)
+        conn.commit()
+
+
+def _pg_load(key: str, default=None):
+    with _get_pool().connection() as conn:
+        row = conn.execute(
+            "SELECT data FROM json_store WHERE key = %s", (key,)
+        ).fetchone()
+    if row is None:
+        return default if default is not None else []
+    return row[0]
+
+
+def _pg_save(key: str, data) -> None:
+    with _get_pool().connection() as conn:
+        conn.execute(
+            """INSERT INTO json_store (key, data) VALUES (%s, %s::jsonb)
+               ON CONFLICT (key) DO UPDATE SET data = EXCLUDED.data""",
+            (key, json.dumps(data, ensure_ascii=False)),
+        )
+        conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# Arquivo local (fallback)
+# ---------------------------------------------------------------------------
+def _file_load(path: str, default=None):
+    if not os.path.exists(path):
+        return default if default is not None else []
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (json.JSONDecodeError, KeyError):
+        return default if default is not None else []
+
+
+def _file_save(path: str, data) -> None:
+    with open(path, "w") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+# ---------------------------------------------------------------------------
+# Interface pública
+# ---------------------------------------------------------------------------
+def use_db() -> bool:
+    return bool(_DATABASE_URL)
+
+
+def load(key: str, file_path: str = "", default=None):
+    """Carrega dados por chave (PG) ou caminho de arquivo (local)."""
+    if use_db():
+        return _pg_load(key, default)
+    return _file_load(file_path or key, default)
+
+
+def save(key: str, data, file_path: str = "") -> None:
+    """Salva dados por chave (PG) ou caminho de arquivo (local)."""
+    if use_db():
+        _pg_save(key, data)
+    else:
+        _file_save(file_path or key, data)

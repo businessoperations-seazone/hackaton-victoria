@@ -1,27 +1,20 @@
 """Persistência de histórico de conversas por usuário."""
 
-import json
-import os
 import uuid
 from datetime import datetime
 
-HISTORY_PATH = os.path.join(os.path.dirname(__file__), "chat_history.json")
+import storage
+
+STORE_KEY = "chat_history"
 MAX_CONVERSATIONS_PER_USER = 30
 
 
 def _load_all() -> list[dict]:
-    if not os.path.exists(HISTORY_PATH):
-        return []
-    try:
-        with open(HISTORY_PATH) as f:
-            return json.load(f)
-    except (json.JSONDecodeError, KeyError):
-        return []
+    return storage.load(STORE_KEY, default=[])
 
 
 def _save_all(conversations: list[dict]) -> None:
-    with open(HISTORY_PATH, "w") as f:
-        json.dump(conversations, f, ensure_ascii=False, indent=2)
+    storage.save(STORE_KEY, conversations)
 
 
 def save_conversation(conv_id: str, messages: list[dict], user_email: str = "") -> None:

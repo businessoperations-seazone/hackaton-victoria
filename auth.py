@@ -1,11 +1,11 @@
 """Autenticação simples com email @seazone.com.br + senha."""
 
-import json
-import os
 import hashlib
 import secrets
 
-USERS_PATH = os.path.join(os.path.dirname(__file__), "users.json")
+import storage
+
+STORE_KEY = "users"
 ALLOWED_DOMAIN = "seazone.com.br"
 
 
@@ -14,18 +14,11 @@ def _hash_password(password: str, salt: str) -> str:
 
 
 def _load_users() -> dict:
-    if not os.path.exists(USERS_PATH):
-        return {}
-    try:
-        with open(USERS_PATH) as f:
-            return json.load(f)
-    except (json.JSONDecodeError, KeyError):
-        return {}
+    return storage.load(STORE_KEY, default={})
 
 
 def _save_users(users: dict) -> None:
-    with open(USERS_PATH, "w") as f:
-        json.dump(users, f, ensure_ascii=False, indent=2)
+    storage.save(STORE_KEY, users)
 
 
 def validate_email(email: str) -> tuple[bool, str]:

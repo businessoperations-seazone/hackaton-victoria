@@ -1,28 +1,22 @@
 """Persistência e refresh de painéis do dashboard por usuário."""
 
 import json
-import os
 import uuid
 from datetime import datetime
 from nekt_client import call_tool
 
-DASHBOARDS_PATH = os.path.join(os.path.dirname(__file__), "dashboards.json")
+import storage
+
+STORE_KEY = "dashboards"
 MAX_PANELS_PER_USER = 20
 
 
 def _load_all() -> list[dict]:
-    if not os.path.exists(DASHBOARDS_PATH):
-        return []
-    try:
-        with open(DASHBOARDS_PATH) as f:
-            return json.load(f)
-    except (json.JSONDecodeError, KeyError):
-        return []
+    return storage.load(STORE_KEY, default=[])
 
 
 def _save_all(panels: list[dict]) -> None:
-    with open(DASHBOARDS_PATH, "w") as f:
-        json.dump(panels, f, ensure_ascii=False, indent=2)
+    storage.save(STORE_KEY, panels)
 
 
 def new_panel_id() -> str:
