@@ -3,3 +3,4 @@ __pycache__/
 memory.json
 .env
 venv/
+.venv/

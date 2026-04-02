@@ -1,13 +1,106 @@
-"""Agente de BI usando Claude Code CLI como backend."""
+"""Agente de BI usando OpenRouter (OpenAI SDK) como backend."""
 
-import subprocess
 import json
 import os
 import re
+from openai import OpenAI
 from prompts import build_system_prompt
 from memory import load_memory, save_memory, add_entry
+from nekt_client import call_tool
 
-_MCP_CONFIG_PATH = "/tmp/nekt-mcp-config.json"
+# --- Config ---
+_MODEL = os.getenv("BI_AGENT_MODEL", "anthropic/claude-sonnet-4")
+_client = None
+
+
+def _get_client() -> OpenAI:
+    global _client
+    if _client is None:
+        api_key = os.getenv("OPENROUTER_API_KEY", "")
+        if not api_key:
+            raise RuntimeError(
+                "OPENROUTER_API_KEY não configurada. "
+                "Defina a variável de ambiente ou crie um arquivo .env"
+            )
+        _client = OpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=api_key,
+        )
+    return _client
+
+# --- Tools disponíveis para o modelo ---
+TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "execute_sql",
+            "description": (
+                "Executa uma query SQL no Nekt Data Lakehouse e retorna os resultados. "
+                "Use para consultar tabelas Gold, Silver e Trusted."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "sql_query": {
+                        "type": "string",
+                        "description": "Query SQL para executar no lakehouse",
+                    }
+                },
+                "required": ["sql_query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_relevant_tables_ddl",
+            "description": (
+                "Busca tabelas relevantes no lakehouse a partir de uma pergunta. "
+                "Retorna os DDLs (schemas) das tabelas encontradas. "
+                "Use para descobrir tabelas quando não conhece o schema."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "question": {
+                        "type": "string",
+                        "description": "Pergunta ou palavras-chave para buscar tabelas relevantes (ex: 'reservas', 'churn imóveis')",
+                    }
+                },
+                "required": ["question"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_table_preview",
+            "description": (
+                "Retorna uma prévia (primeiras linhas) de uma tabela do lakehouse. "
+                "Use para verificar formato dos dados antes de montar a query final."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "table_name": {
+                        "type": "string",
+                        "description": "Nome completo da tabela (ex: 'nekt_gold.kpis_diretoria_pivotada_2')",
+                    }
+                },
+                "required": ["table_name"],
+            },
+        },
+    },
+]
+
+# Mapeamento tool name → nome real no MCP (caso difira)
+_TOOL_MAP = {
+    "execute_sql": "execute_sql",
+    "get_relevant_tables_ddl": "get_relevant_tables_ddl",
+    "get_table_preview": "get_table_preview",
+}
+
+MAX_TOOL_ROUNDS = 10
 
 
 def _extract_memory_facts(text: str) -> list[str]:
@@ -16,12 +109,7 @@ def _extract_memory_facts(text: str) -> list[str]:
     if not match:
         return []
     lines = match.group(1).strip().split("\n")
-    facts = []
-    for line in lines:
-        line = line.strip().lstrip("- ").strip()
-        if line:
-            facts.append(line)
-    return facts
+    return [line.strip().lstrip("- ").strip() for line in lines if line.strip()]
 
 
 def _remove_memory_block(text: str) -> str:
@@ -29,70 +117,89 @@ def _remove_memory_block(text: str) -> str:
     return re.sub(r"\[MEMORY\].*?\[/MEMORY\]", "", text, flags=re.DOTALL).strip()
 
 
-def _ensure_mcp_config():
-    """Cria o arquivo de config MCP se não existir."""
-    if os.path.exists(_MCP_CONFIG_PATH):
-        return
-    claude_json = os.path.expanduser("~/.claude.json")
-    with open(claude_json) as f:
-        data = json.load(f)
-    nekt = data["projects"]["/home/victoria"]["mcpServers"]["Nekt"]
-    config = {"mcpServers": {"Nekt": nekt}}
-    with open(_MCP_CONFIG_PATH, "w") as f:
-        json.dump(config, f)
+def _execute_tool_call(name: str, arguments: dict) -> str:
+    """Executa uma tool call no Nekt MCP."""
+    mcp_name = _TOOL_MAP.get(name, name)
+    try:
+        return call_tool(mcp_name, arguments)
+    except Exception as e:
+        return f"Erro ao executar {name}: {e}"
 
 
-def run_agent(user_message: str, session_id: str | None = None) -> tuple[str, str]:
+def run_agent(
+    user_message: str,
+    history: list[dict] | None = None,
+    on_status: callable = None,
+) -> str:
     """
-    Executa uma pergunta via Claude Code CLI.
+    Executa uma pergunta via OpenRouter API com tool calling.
 
-    Na primeira mensagem, cria sessão nova com system prompt + memória.
-    Nas seguintes, retoma a sessão com --resume.
+    Args:
+        user_message: Pergunta do usuário.
+        history: Histórico de mensagens anteriores [{"role": ..., "content": ...}].
+        on_status: Callback opcional para atualizar status (recebe string).
 
     Returns:
-        (resposta_texto, session_id)
+        Texto da resposta final (limpo, sem bloco MEMORY).
     """
-    _ensure_mcp_config()
+    client = _get_client()
 
-    cmd = [
-        "claude",
-        "-p", user_message,
-        "--output-format", "json",
-        "--model", "sonnet",
-        "--mcp-config", _MCP_CONFIG_PATH,
-        "--permission-mode", "bypassPermissions",
-        "--allowedTools",
-        "mcp__Nekt__execute_sql",
-        "mcp__Nekt__get_relevant_tables_ddl",
-        "mcp__Nekt__get_table_preview",
-    ]
+    # Monta mensagens
+    system_prompt = build_system_prompt()
+    messages = [{"role": "system", "content": system_prompt}]
 
-    if session_id:
-        cmd.extend(["--resume", session_id])
-    else:
-        system_prompt = build_system_prompt()
-        cmd.extend(["--system-prompt", system_prompt])
+    if history:
+        messages.extend(history)
 
-    result = subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        timeout=300,
-    )
+    messages.append({"role": "user", "content": user_message})
 
-    if result.returncode != 0:
-        error_msg = result.stderr.strip() or "Erro desconhecido ao executar o agente."
-        raise RuntimeError(f"Erro no Claude CLI: {error_msg}")
+    # Loop de tool calling
+    for round_num in range(MAX_TOOL_ROUNDS):
+        if on_status:
+            if round_num == 0:
+                on_status("Analisando sua pergunta...")
+            else:
+                on_status(f"Consultando dados (etapa {round_num + 1})...")
 
-    try:
-        data = json.loads(result.stdout)
-        new_session_id = data.get("session_id", session_id)
-        response_text = data.get("result", result.stdout)
-    except json.JSONDecodeError:
-        response_text = result.stdout
-        new_session_id = session_id
+        response = client.chat.completions.create(
+            model=_MODEL,
+            messages=messages,
+            tools=TOOLS,
+            max_tokens=2000,
+        )
 
-    # Extrair e salvar fatos de memória
+        choice = response.choices[0]
+
+        # Se não há tool calls, temos a resposta final
+        if not choice.message.tool_calls:
+            break
+
+        # Adiciona a mensagem do assistente com tool calls
+        messages.append(choice.message)
+
+        # Executa cada tool call
+        for tc in choice.message.tool_calls:
+            if on_status:
+                tool_label = {
+                    "execute_sql": "Executando SQL...",
+                    "get_relevant_tables_ddl": "Buscando tabelas relevantes...",
+                    "get_table_preview": "Verificando dados...",
+                }.get(tc.function.name, f"Executando {tc.function.name}...")
+                on_status(tool_label)
+
+            args = json.loads(tc.function.arguments)
+            result = _execute_tool_call(tc.function.name, args)
+
+            messages.append({
+                "role": "tool",
+                "tool_call_id": tc.id,
+                "content": result,
+            })
+
+    # Extrai resposta final
+    response_text = choice.message.content or ""
+
+    # Salva fatos de memória
     facts = _extract_memory_facts(response_text)
     if facts:
         entries = load_memory()
@@ -100,7 +207,4 @@ def run_agent(user_message: str, session_id: str | None = None) -> tuple[str, st
             entries = add_entry(entries, fact, source="agent")
         save_memory(entries)
 
-    # Limpar bloco de memória do texto visível
-    clean_response = _remove_memory_block(response_text)
-
-    return clean_response, new_session_id
+    return _remove_memory_block(response_text)

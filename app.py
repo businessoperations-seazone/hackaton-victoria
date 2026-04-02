@@ -1,9 +1,13 @@
 """Interface de chat Streamlit para o Agente de Perguntas de Negócio."""
 
+import os
 import streamlit as st
+from dotenv import load_dotenv
 from agent import run_agent
 from charts import extract_chart_data, remove_chart_block, create_chart
 from memory import load_memory, save_memory
+
+load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
 # --- Page config ---
 st.set_page_config(
@@ -38,7 +42,6 @@ with st.sidebar:
 
     if st.button("🗑️  Nova conversa", use_container_width=True, type="secondary"):
         st.session_state.messages = []
-        st.session_state.session_id = None
         st.rerun()
 
     st.divider()
@@ -257,8 +260,6 @@ st.markdown(f"""
 # --- Session state ---
 if "messages" not in st.session_state:
     st.session_state.messages = []
-if "session_id" not in st.session_state:
-    st.session_state.session_id = None
 
 SUGGESTIONS = [
     "Qual o valor do churn de imóveis este mês?",
@@ -319,11 +320,20 @@ if prompt:
     with st.chat_message("assistant"):
         with st.status("Analisando sua pergunta...", expanded=True) as status:
             try:
-                status.update(label="Consultando dados do Nekt...", state="running")
-                response_text, new_session_id = run_agent(
-                    prompt, st.session_state.session_id
+                def on_status(label):
+                    status.update(label=label, state="running")
+
+                # Monta histórico para o agente (só role + content)
+                history = [
+                    {"role": m["role"], "content": m["content"]}
+                    for m in st.session_state.messages[:-1]  # exclui a msg atual
+                ]
+
+                response_text = run_agent(
+                    prompt,
+                    history=history,
+                    on_status=on_status,
                 )
-                st.session_state.session_id = new_session_id
 
                 status.update(label="Processando resposta...", state="running")
                 chart_data = extract_chart_data(response_text)
@@ -347,7 +357,7 @@ if prompt:
             except Exception as e:
                 status.update(label="Erro na consulta", state="error", expanded=False)
                 st.error(
-                    f"😕 Não consegui processar sua pergunta. "
+                    f"Não consegui processar sua pergunta. "
                     f"Tente reformular ou pergunte de outra forma.\n\n"
                     f"Detalhe técnico: `{e}`"
                 )
