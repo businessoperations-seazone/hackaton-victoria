@@ -149,21 +149,21 @@ def _execute_tool_call(name: str, arguments: dict) -> str:
         return f"Erro ao executar {name}: {e}"
 
 
+# Preços por token (Haiku 3.5 via OpenRouter)
+_PRICE_INPUT = 0.8 / 1_000_000   # $0.80 por 1M tokens
+_PRICE_OUTPUT = 4.0 / 1_000_000  # $4.00 por 1M tokens
+
+
 def run_agent(
     user_message: str,
     history: list[dict] | None = None,
     on_status: callable = None,
-) -> str:
+) -> tuple[str, float]:
     """
     Executa uma pergunta via OpenRouter API com tool calling.
 
-    Args:
-        user_message: Pergunta do usuário.
-        history: Histórico de mensagens anteriores [{"role": ..., "content": ...}].
-        on_status: Callback opcional para atualizar status (recebe string).
-
     Returns:
-        Texto da resposta final (limpo, sem bloco MEMORY).
+        (resposta_texto, custo_em_dolares)
     """
     client = _get_client()
 
@@ -178,6 +178,9 @@ def run_agent(
     messages.append({"role": "user", "content": user_message})
 
     # Loop de tool calling
+    total_input_tokens = 0
+    total_output_tokens = 0
+
     for round_num in range(MAX_TOOL_ROUNDS):
         if on_status:
             if round_num == 0:
@@ -191,6 +194,11 @@ def run_agent(
             tools=TOOLS,
             max_tokens=2000,
         )
+
+        # Acumular tokens
+        if response.usage:
+            total_input_tokens += response.usage.prompt_tokens or 0
+            total_output_tokens += response.usage.completion_tokens or 0
 
         choice = response.choices[0]
 
@@ -231,4 +239,5 @@ def run_agent(
             entries = add_entry(entries, fact, source="agent")
         save_memory(entries)
 
-    return _remove_memory_block(response_text)
+    cost = (total_input_tokens * _PRICE_INPUT) + (total_output_tokens * _PRICE_OUTPUT)
+    return _remove_memory_block(response_text), cost

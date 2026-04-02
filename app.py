@@ -11,6 +11,7 @@ from chat_history import (
     save_conversation, load_conversation, list_conversations,
     delete_conversation, new_conversation_id,
 )
+from auth import login, register, validate_email
 
 # --- Logo em base64 para uso inline ---
 _LOGO_PATH = os.path.join(os.path.dirname(__file__), "logo.png")
@@ -26,88 +27,14 @@ st.set_page_config(
     layout="centered",
 )
 
-# --- Dark mode: usa a key do toggle diretamente ---
+# --- State defaults ---
 if "dark_mode" not in st.session_state:
     st.session_state.dark_mode = True
+if "is_processing" not in st.session_state:
+    st.session_state.is_processing = False
 
-# --- Sidebar (renderiza primeiro para capturar o toggle) ---
-with st.sidebar:
-    st.markdown(f"""
-    <div id="nektar-sidebar-header">
-        <img src="data:image/png;base64,{_LOGO_B64}" />
-        <h3 id="sidebar-title">Nektar</h3>
-        <span>Agente de Negócio Seazone</span>
-    </div>
-    """, unsafe_allow_html=True)
-
-    st.divider()
-
-    dark = st.toggle("🌙 Modo escuro", key="dark_mode")
-
-    st.divider()
-
-    if st.button("➕  Nova conversa", use_container_width=True, type="secondary"):
-        # Salva conversa atual antes de criar nova
-        if st.session_state.messages:
-            save_conversation(st.session_state.conv_id, st.session_state.messages)
-        st.session_state.messages = []
-        st.session_state.conv_id = new_conversation_id()
-        st.rerun()
-
-    st.divider()
-
-    # --- Histórico de conversas ---
-    st.markdown("##### Conversas anteriores")
-    conversations = list_conversations()
-    if conversations:
-        for conv in conversations:
-            col1, col2 = st.columns([5, 1])
-            with col1:
-                if st.button(
-                    f"💬 {conv['title']}",
-                    key=f"conv_{conv['id']}",
-                    use_container_width=True,
-                ):
-                    # Salva conversa atual antes de trocar
-                    if st.session_state.messages:
-                        save_conversation(
-                            st.session_state.conv_id, st.session_state.messages
-                        )
-                    st.session_state.messages = load_conversation(conv["id"])
-                    st.session_state.conv_id = conv["id"]
-                    st.rerun()
-            with col2:
-                if st.button("🗑️", key=f"del_{conv['id']}"):
-                    delete_conversation(conv["id"])
-                    if st.session_state.conv_id == conv["id"]:
-                        st.session_state.messages = []
-                        st.session_state.conv_id = new_conversation_id()
-                    st.rerun()
-    else:
-        st.caption("Nenhuma conversa salva ainda.")
-
-    st.divider()
-
-    with st.expander("💡 Dicas de uso"):
-        st.markdown("""
-- Seja **específico com datas**: "em março de 2026"
-- Peça **comparações**: "compare janeiro e fevereiro"
-- Mencione o **setor**: "KPIs de Marketing"
-- Para **gráficos**, peça dados com 3+ itens
-""")
-
-    with st.expander("🧠 Memória do agente"):
-        mem = load_memory()
-        if mem:
-            for e in mem:
-                st.caption(f"[{e['date']}] {e['fact']}")
-            if st.button("🗑️ Limpar memória", use_container_width=True):
-                save_memory([])
-                st.rerun()
-        else:
-            st.caption("Nenhum aprendizado registrado ainda.")
-
-    st.caption("Nektar v1.0 · Dados atualizados diariamente")
+dark = st.session_state.dark_mode
+_disabled = st.session_state.is_processing
 
 # --- Tokens de cor por tema ---
 if dark:
@@ -178,23 +105,23 @@ st.markdown(f"""
         display: block;
     }}
 
-    /* === Nektar welcome screen === */
-    #nektar-welcome {{
+    /* === Nektar welcome/login screen === */
+    #nektar-welcome, #nektar-login-header {{
         text-align: center !important;
         padding: 3rem 1rem 1rem;
     }}
-    #nektar-welcome img {{
+    #nektar-welcome img, #nektar-login-header img {{
         width: 80px;
         height: 80px;
         object-fit: contain;
         margin: 0 auto 0.5rem;
         display: block;
     }}
-    #nektar-welcome h2 {{
+    #nektar-welcome h2, #nektar-login-header h2 {{
         margin-bottom: 0.25rem;
         text-align: center !important;
     }}
-    #nektar-welcome p {{
+    #nektar-welcome p, #nektar-login-header p {{
         font-size: 1.05rem;
         text-align: center !important;
     }}
@@ -250,7 +177,7 @@ st.markdown(f"""
         color: {T["accent"]} !important;
     }}
 
-    /* === Chat input — container, textarea, botão, tudo === */
+    /* === Chat input === */
     [data-testid="stChatInput"],
     [data-testid="stChatInput"] > div,
     [data-testid="stChatInput"] > div > div,
@@ -312,7 +239,6 @@ st.markdown(f"""
     #sidebar-title {{
         color: {T["heading"]};
     }}
-    /* Esconder ícone de link nos headings */
     h1 a, h2 a, h3 a, h4 a,
     [data-testid="stMarkdownContainer"] a.header-link,
     .stMarkdown h2 a {{
@@ -356,8 +282,244 @@ st.markdown(f"""
     .stApp section[data-testid="stMain"] > div {{
         background-color: {T["bg"]} !important;
     }}
+
+    /* === Login form submit button === */
+    [data-testid="stForm"] .stButton > button,
+    [data-testid="stFormSubmitButton"] > button {{
+        background-color: {T["accent"]} !important;
+        color: white !important;
+        border: none !important;
+        font-weight: 600;
+    }}
+    [data-testid="stForm"] .stButton > button:hover,
+    [data-testid="stFormSubmitButton"] > button:hover {{
+        background-color: {"#3A6FCC" if dark else "#0044CC"} !important;
+        color: white !important;
+        border: none !important;
+    }}
+
+    /* === Login form inputs === */
+    .stTextInput input {{
+        background-color: {T["bg_secondary"]} !important;
+        color: {T["text"]} !important;
+        border-color: {T["border"]} !important;
+        border-radius: 10px;
+    }}
+    .stTextInput label {{
+        color: {T["text"]} !important;
+    }}
+
+    /* === Tabs === */
+    .stTabs [data-baseweb="tab-list"] {{
+        gap: 8px;
+    }}
+    .stTabs [data-baseweb="tab"] {{
+        background-color: {T["bg_secondary"]} !important;
+        color: {T["text"]} !important;
+        border-radius: 8px;
+        padding: 0.5rem 1rem;
+    }}
+    .stTabs [aria-selected="true"] {{
+        background-color: {T["accent"]} !important;
+        color: white !important;
+    }}
 </style>
 """, unsafe_allow_html=True)
+
+
+# ============================================================
+# TELA DE LOGIN
+# ============================================================
+def show_login_page():
+    """Renderiza a tela de login/cadastro."""
+    st.markdown(f"""
+    <div id="nektar-login-header">
+        <img src="data:image/png;base64,{_LOGO_B64}" />
+        <h2 style="color: {T["heading"]};">Nektar</h2>
+        <p style="color: {T["text_secondary"]}; font-size: 0.95rem;">
+            Agente de Negócio Seazone
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Container centralizado para o form
+    _, col, _ = st.columns([1, 2, 1])
+
+    with col:
+        st.markdown(
+            f"<p style='text-align:center; color:{T['text_secondary']}; "
+            f"font-size:0.8rem; margin-bottom:0.5rem;'>"
+            "Acesso exclusivo para colaboradores <b>@seazone.com.br</b></p>",
+            unsafe_allow_html=True,
+        )
+
+        tab_login, tab_register = st.tabs(["Entrar", "Cadastrar"])
+
+        with tab_login:
+            with st.form("login_form"):
+                email = st.text_input(
+                    "Email", placeholder="seu.nome@seazone.com.br"
+                )
+                password = st.text_input("Senha", type="password")
+                submitted = st.form_submit_button(
+                    "Entrar", use_container_width=True
+                )
+
+                if submitted:
+                    success, msg, name = login(email, password)
+                    if success:
+                        st.session_state.authenticated = True
+                        st.session_state.user_email = email
+                        st.session_state.user_name = name
+                        st.rerun()
+                    else:
+                        st.error(msg)
+
+        with tab_register:
+            with st.form("register_form"):
+                reg_name = st.text_input("Nome completo")
+                reg_email = st.text_input(
+                    "Email corporativo",
+                    placeholder="seu.nome@seazone.com.br",
+                )
+                reg_password = st.text_input(
+                    "Senha (min. 6 caracteres)", type="password", key="reg_pw"
+                )
+                reg_password2 = st.text_input(
+                    "Confirmar senha", type="password", key="reg_pw2"
+                )
+                reg_submitted = st.form_submit_button(
+                    "Cadastrar", use_container_width=True
+                )
+
+                if reg_submitted:
+                    if reg_password != reg_password2:
+                        st.error("As senhas não coincidem.")
+                    else:
+                        success, msg = register(reg_email, reg_name, reg_password)
+                        if success:
+                            st.success(
+                                "Cadastro realizado! Volte na aba Entrar."
+                            )
+                        else:
+                            st.error(msg)
+
+
+# ============================================================
+# VERIFICAÇÃO DE AUTENTICAÇÃO
+# ============================================================
+if "authenticated" not in st.session_state:
+    st.session_state.authenticated = False
+
+if not st.session_state.authenticated:
+    show_login_page()
+    st.stop()
+
+
+# ============================================================
+# APP PRINCIPAL (só aparece após login)
+# ============================================================
+
+# --- Sidebar ---
+with st.sidebar:
+    st.markdown(f"""
+    <div id="nektar-sidebar-header">
+        <img src="data:image/png;base64,{_LOGO_B64}" />
+        <h3 id="sidebar-title">Nektar</h3>
+        <span>Agente de Negócio Seazone</span>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.divider()
+
+    _user = st.session_state.get("user_email", "")
+
+    if st.button("➕  Nova conversa", use_container_width=True, type="secondary", disabled=_disabled):
+        if st.session_state.messages:
+            save_conversation(st.session_state.conv_id, st.session_state.messages, _user)
+        st.session_state.messages = []
+        st.session_state.conv_id = new_conversation_id()
+        st.rerun()
+
+    st.divider()
+
+    # --- Histórico de conversas ---
+    st.markdown("##### Conversas anteriores")
+    conversations = list_conversations(_user)
+    if conversations:
+        for conv in conversations:
+            col1, col2 = st.columns([5, 1])
+            with col1:
+                if st.button(
+                    f"💬 {conv['title']}",
+                    key=f"conv_{conv['id']}",
+                    use_container_width=True,
+                    disabled=_disabled,
+                ):
+                    if st.session_state.messages:
+                        save_conversation(
+                            st.session_state.conv_id, st.session_state.messages, _user
+                        )
+                    st.session_state.messages = load_conversation(conv["id"], _user)
+                    st.session_state.conv_id = conv["id"]
+                    st.rerun()
+            with col2:
+                if st.button("🗑️", key=f"del_{conv['id']}",  disabled=_disabled):
+                    delete_conversation(conv["id"], _user)
+                    if st.session_state.conv_id == conv["id"]:
+                        st.session_state.messages = []
+                        st.session_state.conv_id = new_conversation_id()
+                    st.rerun()
+    else:
+        st.caption("Nenhuma conversa salva ainda.")
+
+    st.divider()
+
+    with st.expander("💡 Dicas de uso"):
+        st.markdown("""
+- Seja **específico com datas**: "em março de 2026"
+- Peça **comparações**: "compare janeiro e fevereiro"
+- Mencione o **setor**: "KPIs de Marketing"
+- Para **gráficos**, peça dados com 3+ itens
+""")
+
+    with st.expander("🧠 Memória do agente"):
+        mem = load_memory()
+        if mem:
+            for e in mem:
+                st.caption(f"[{e['date']}] {e['fact']}")
+            if st.button("🗑️ Limpar memória", use_container_width=True, disabled=_disabled):
+                save_memory([])
+                st.rerun()
+        else:
+            st.caption("Nenhum aprendizado registrado ainda.")
+
+    # --- Indicador de custo da sessão ---
+    session_cost = st.session_state.get("session_cost", 0.0)
+    if session_cost > 0:
+        st.caption(f"Custo da sessão: **${session_cost:.4f}**")
+
+    st.caption("Nektar v1.0 · Dados atualizados diariamente")
+
+    def _on_dark_toggle():
+        st.session_state.dark_mode = not st.session_state.dark_mode
+
+    st.toggle(
+        "🌙 Modo escuro",
+        value=st.session_state.dark_mode,
+        key="_dark_toggle",
+        on_change=_on_dark_toggle,
+        disabled=_disabled,
+    )
+
+    st.divider()
+
+    if st.button("🚪 Sair", use_container_width=True, disabled=_disabled):
+        st.session_state.authenticated = False
+        st.session_state.user_email = None
+        st.session_state.user_name = None
+        st.session_state.messages = []
+        st.rerun()
 
 # --- Session state ---
 if "messages" not in st.session_state:
@@ -379,9 +541,9 @@ if not st.session_state.messages:
     st.markdown(f"""
     <div id="nektar-welcome">
         <img src="data:image/png;base64,{_LOGO_B64}" />
-        <h2 style="color: {T["heading"]};">Nektar</h2>
+        <h2 style="color: {T["heading"]};">Olá, {st.session_state.get('user_name', '').split()[0]}</h2>
         <p style="color: {T["text_secondary"]};">
-            Agente de Negócio Seazone. Pergunte qualquer coisa sobre os dados em linguagem natural.
+            Pergunte qualquer coisa sobre os dados da Seazone em linguagem natural.
         </p>
     </div>
     """, unsafe_allow_html=True)
@@ -424,20 +586,23 @@ if prompt:
     with st.chat_message("assistant"):
         with st.status("Analisando sua pergunta...", expanded=True) as status:
             try:
+                st.session_state.is_processing = True
+
                 def on_status(label):
                     status.update(label=label, state="running")
 
-                # Monta histórico para o agente (só role + content)
                 history = [
                     {"role": m["role"], "content": m["content"]}
-                    for m in st.session_state.messages[:-1]  # exclui a msg atual
+                    for m in st.session_state.messages[:-1]
                 ]
 
-                response_text = run_agent(
+                response_text, cost = run_agent(
                     prompt,
                     history=history,
                     on_status=on_status,
                 )
+                st.session_state.session_cost = st.session_state.get("session_cost", 0.0) + cost
+                st.session_state.is_processing = False
 
                 status.update(label="Processando resposta...", state="running")
                 chart_data = extract_chart_data(response_text)
@@ -457,11 +622,14 @@ if prompt:
                     "chart_data": chart_data,
                 })
                 save_conversation(
-                    st.session_state.conv_id, st.session_state.messages
+                    st.session_state.conv_id,
+                    st.session_state.messages,
+                    st.session_state.get("user_email", ""),
                 )
                 st.rerun()
 
             except Exception as e:
+                st.session_state.is_processing = False
                 status.update(label="Erro na consulta", state="error", expanded=False)
                 st.error(
                     f"Não consegui processar sua pergunta. "
