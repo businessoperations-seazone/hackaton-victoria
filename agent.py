@@ -9,7 +9,8 @@ from memory import load_memory, save_memory, add_entry
 from nekt_client import call_tool
 
 # --- Config ---
-_MODEL = os.getenv("BI_AGENT_MODEL", "anthropic/claude-sonnet-4")
+_MODEL = os.getenv("BI_AGENT_MODEL", "anthropic/claude-3.5-haiku")
+MAX_HISTORY_MESSAGES = 6  # últimas 3 perguntas + 3 respostas
 _client = None
 
 
@@ -171,7 +172,8 @@ def run_agent(
     messages = [{"role": "system", "content": system_prompt}]
 
     if history:
-        messages.extend(history)
+        # Limita histórico para economizar tokens
+        messages.extend(history[-MAX_HISTORY_MESSAGES:])
 
     messages.append({"role": "user", "content": user_message})
 
