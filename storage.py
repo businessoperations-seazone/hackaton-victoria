@@ -7,19 +7,21 @@ para arquivos JSON no disco (útil para desenvolvimento local).
 import json
 import os
 
-_DATABASE_URL = os.environ.get("DATABASE_URL", "")
-
 # ---------------------------------------------------------------------------
 # PostgreSQL backend
 # ---------------------------------------------------------------------------
 _pool = None
 
 
+def _db_url() -> str:
+    return os.environ.get("DATABASE_URL", "")
+
+
 def _get_pool():
     global _pool
     if _pool is None:
         from psycopg_pool import ConnectionPool
-        _pool = ConnectionPool(_DATABASE_URL, min_size=1, max_size=5)
+        _pool = ConnectionPool(_db_url(), min_size=1, max_size=5)
         _init_table()
     return _pool
 
@@ -77,7 +79,7 @@ def _file_save(path: str, data) -> None:
 # Interface pública
 # ---------------------------------------------------------------------------
 def use_db() -> bool:
-    return bool(_DATABASE_URL)
+    return bool(_db_url())
 
 
 def load(key: str, file_path: str = "", default=None):
